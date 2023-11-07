@@ -75,10 +75,10 @@ def train_validate_epoch(generator, discriminator, loader, epoch, optimizer_gen,
     train_losses = OrderedDict([('gen_loss_train', []), ('disc_loss_train', [])])
     val_losses = OrderedDict([('gen_loss_val', []), ('disc_loss_val', [])])
 
-    for data_ in loader:
+    for i, data_ in enumerate(loader):
         batch_size = data_.size(0)
         fakes = generator.sample(batch_size)
-        disc_loss = -(torch.log(discriminator(data_)).mean() + torch.log(1 - discriminator(fakes)).mean())
+        disc_loss = -(discriminator(data_).log().mean() + (1 - discriminator(fakes)).log().mean())
         optimizer_disc.zero_grad()
         if mode == "train":
             disc_loss.backward()
@@ -87,13 +87,14 @@ def train_validate_epoch(generator, discriminator, loader, epoch, optimizer_gen,
         else:
             val_losses[f"disc_loss_{mode}"].append(disc_loss.item())
         optimizer_gen.zero_grad()
-        gen_loss = torch.log(1 - discriminator(generator.sample(batch_size))).mean()
-        if mode == "train":
-            gen_loss.backward()
-            optimizer_gen.step()
-            train_losses[f"gen_loss_{mode}"].append(gen_loss.item())
-        else:
-            val_losses[f"gen_loss_{mode}"].append(gen_loss.item())
+        gen_loss = (1 - discriminator(generator.sample(batch_size))).log().mean()
+        if i % 2 == 0:
+            if mode == "train":
+                gen_loss.backward()
+                optimizer_gen.step()
+                train_losses[f"gen_loss_{mode}"].append(gen_loss.item())
+            else:
+                val_losses[f"gen_loss_{mode}"].append(gen_loss.item())
 
         desc = f"Epoch {epoch}-{mode}"
         if verbose:
@@ -108,8 +109,8 @@ def train_validate_epoch(generator, discriminator, loader, epoch, optimizer_gen,
 
 def train(generator, discriminator, train_loader, test_loader, verbose, **train_args):
     epochs, lr, grad_clip = train_args["epochs"], train_args["lr"], train_args["grad_clip"]
-    optimizer_gen = Adam(generator.parameters(), lr=lr)
-    optimizer_disc = Adam(discriminator.parameters(), lr=lr)
+    optimizer_gen = Adam(generator.parameters(), lr=lr, betas=(0, 0.9))
+    optimizer_disc = Adam(discriminator.parameters(), lr=lr, betas=(0, 0.9))
 
     train_losses = OrderedDict(gen_loss_train=[], disc_loss_train=[])
     test_losses = OrderedDict(gen_loss_val=[], disc_loss_val=[])
