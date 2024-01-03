@@ -6,6 +6,15 @@ import numpy as np
 from typing import Tuple
 import math
 
+"""
+References: Transformer code has been inspired by multiple works, especially from a blog by Peter Bloem.   
+    Blog (Peter Bloem): https://peterbloem.nl/blog/transformers
+    Pytorch website: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+    Kaggle code: https://www.kaggle.com/code/arunmohan003/transformer-from-scratch-using-pytorch
+    Code from Umar Jamil: https://github.com/hkproj/pytorch-transformer/blob/main/model.py
+                    
+"""
+
 
 class Embedding(nn.Module):
     def __init__(self, vocab_size: int, d_model: int):
@@ -59,39 +68,31 @@ class SelfAttentionBlock(nn.Module):
 
         self.unify_heads = nn.Linear(d_model, d_model)
 
-    def forward(self, x, encoder_out=None, mask=None):
-        batch, time_steps, d_model = x.size()
-
-        Q = self.to_queries(x)
-        Q = Q.view(batch, time_steps, self.n_heads, self.head_dim)  # head_dim * n_heads = d_model
-        if encoder_out is not None:
-            # cross attention
-            batch, time_steps, d_model = encoder_out.size()
-            K = self.to_keys(encoder_out)
-            V = self.to_values(encoder_out)
-        else:
-            K = self.to_keys(x)
-            V = self.to_values(x)
+    def forward(self, q, k, v, mask=None):
+        q = self.to_queries(q)
+        k = self.to_keys(k)
+        v = self.to_values(v)
 
         # split the K, Q, V for each heads
-        K = K.view(batch, time_steps, self.n_heads, self.head_dim)
-        V = V.view(batch, time_steps, self.n_heads, self.head_dim)
+        q = q.view(q.size(0), -1, self.n_heads, self.head_dim)
+        k = k.view(k.size(0), -1, self.n_heads, self.head_dim)
+        v = v.view(v.size(0), -1, self.n_heads, self.head_dim)
 
-        dot = torch.einsum("btnh, bsnh -> bnts", Q, K)  # dot product between (t,h)-dim and (s,h)-dim
+        attention_weights = q.permute(0, 2, 1, 3) @ k.permute(0, 2, 3, 1)
+        scaled_attention_weights = attention_weights / math.sqrt(self.head_dim)
+
+        # We could also use einsum to calculate the attention weights as below
+        # attention_weights = torch.einsum("btnh, bsnh -> bnts", q, k)  # dot product between (t,h)-dim and (s,h)-dim
         if mask is not None:
-            dot.masked_fill(mask == 0, -1e9)
-        dot = dot / math.sqrt(self.head_dim)
+            attention_weights.masked_fill(mask == 0, -1e9)
 
-        attn_wt = F.softmax(dot, dim=2)
+        scaled_attention_weights = F.softmax(scaled_attention_weights, dim=2)
 
         # self_attn = torch.einsum('bnts, btnd ->bnsd', attn_wt, V)  # out = b,n_head,time,embedding
-        self_attn = attn_wt @ V.transpose(1, 2)
-        # (attn_wt.transpose(1, 2) @ V.transpose(1, 2)).transpose(1, 2).reshape(batch, time_steps,
-        #                                                                       self.n_heads * self.head_dim)
-        # (attn_wt.transpose @ V.transpose).reshape(batch, time_steps,
-        #                                                                       self.n_heads * self.head_dim)
-        out = self.unify_heads(self_attn.reshape(self_attn.size(0), -1, self.n_heads * self.head_dim))
-        return out
+        self_attention = scaled_attention_weights @ v.permute(0, 2, 1, 3)
+
+        out = self.unify_heads(self_attention.reshape(self_attention.size(0), -1, self.n_heads * self.head_dim))
+        return out, self_attention
 
 
 class TransformerBlock(nn.Module):
@@ -110,12 +111,13 @@ class TransformerBlock(nn.Module):
             nn.Linear(self.d_model * 4, self.d_model)
         )
 
-    def forward(self, x, encoder_out=None, mask=None):
-        attended = self.attention(x, encoder_out, mask)
+    def forward(self, q, k, v, mask=None):
+        x = q.clone()
+        attended, self_attention = self.attention(q, k, v, mask)
         x = self.layer_norm_1(attended + x)
 
         fc = self.fc(x)
-        return self.layer_norm_2(fc + x)
+        return self.layer_norm_2(fc + x), self_attention
 
 
 class TransformerEncoder(nn.Module):
@@ -128,13 +130,14 @@ class TransformerEncoder(nn.Module):
             TransformerBlock(d_model, n_heads) for _ in range(num_layers)
         ])
 
-    def forward(self, x, encoder_mask=None):
+    def forward(self, x, mask=None):
         token_embed = self.embedding_layer(x)
         out = self.positional_encoding(token_embed)
-
+        self_attentions = {}
         for layer in self.layers:
-            out = layer(out, mask=encoder_mask)
-        return out
+            out, self_attention = layer(out, out, out, mask)
+            self_attentions[f"layer_{layer}"] = self_attention
+        return out, self_attentions
 
 
 class TransformerDecoderBlock(nn.Module):
@@ -147,10 +150,10 @@ class TransformerDecoderBlock(nn.Module):
         self.transformer_block = TransformerBlock(d_model=d_model, n_heads=n_heads)
 
     def forward(self, x, encoder_out=None, input_mask=None, tgt_mask=None):
-        attend = self.attention(x, encoder_out=None, mask=tgt_mask)
+        attend, self_attention = self.attention(x, x, x, tgt_mask)
         out = self.drop_out(self.norm(attend + x))
-        out = self.transformer_block(out, encoder_out, input_mask)  # cross attention
-        return out
+        out, cross_attention = self.transformer_block(out, encoder_out, encoder_out, input_mask)  # cross attention
+        return out, self_attention, cross_attention
 
 
 class TransformerDecoder(nn.Module):
@@ -170,18 +173,16 @@ class TransformerDecoder(nn.Module):
         token_emb = self.embedding(x)
         out = self.pos_emb(token_emb)
         out = self.dropout(out)
-
+        self_attentions = {}
+        cross_attentions = {}
         for layer in self.layers:
-            out = layer(out, encoder_out, input_mask, tgt_mask)  # it contains cross attention layer
+            out, self_attention, cross_attention = layer(out, encoder_out, input_mask,
+                                                         tgt_mask)  # it contains cross attention layer
+            self_attentions[f"layer_{layer}"] = self_attention
+            cross_attentions[f"layer_{layer}"] = cross_attention
 
         out = self.fc_out(out)
-        return out
-
-
-# class Transformer(nn.Module):
-#     def __init__(self, encoder, decoder):
-#         self.encoder = encoder
-#         self.decoder = decoder
+        return out, self_attentions, cross_attentions
 
 
 class Transformer(nn.Module):
@@ -195,35 +196,10 @@ class Transformer(nn.Module):
 
         self.decoder = TransformerDecoder(tgt_vocab_size, d_model, seq_len, num_layer, n_heads)
 
-    # def forward(self, src, tgt, encoder_mask=None, decoder_mask=None):
-    #     encoder_out = self.encoder(src, encoder_mask)
-    #     decoder_out = self.decoder(tgt, encoder_out, decoder_mask)
-    #     return {"encoder_out": encoder_out, "decoder_out": decoder_out}
-
     def encoder_fwd(self, src, input_mask):
-        encoder_out = self.encoder(src, input_mask)
-        return encoder_out
+        encoder_out, self_attentions = self.encoder(src, input_mask)
+        return encoder_out, self_attentions
 
     def decoder_fwd(self, encoder_out, tgt, input_mask, tgt_mask):
-        decoder_out = self.decoder(tgt, encoder_out, input_mask, tgt_mask)
-        return decoder_out
-
-#
-# src_vocab_size = 11
-# target_vocab_size = 11
-# num_layers = 6
-# seq_length = 12
-# d_model = 256
-# n_heads = 4
-#
-#
-# # let 0 be sos token and 1 be eos token
-# # src = torch.tensor([[0, 2, 5, 6, 4, 3, 9, 5, 2, 9, 10, 1],
-# #                     [0, 2, 8, 7, 3, 4, 5, 6, 7, 2, 10, 1]])
-# # target = torch.tensor([[0, 1, 7, 4, 3, 5, 9, 2, 8, 10, 9, 1],
-# #                        [0, 1, 5, 6, 2, 4, 7, 6, 2, 8, 10, 1]])
-# #
-# # print(src.shape,target.shape)
-# # model = Transformer(target_vocab_size, src_vocab_size, d_model, seq_length, num_layers, n_heads)
-# # out = model(src, target)
-# # print(out.shape)
+        decoder_out, self_attentions, cross_attentions = self.decoder(tgt, encoder_out, input_mask, tgt_mask)
+        return decoder_out, self_attentions, cross_attentions

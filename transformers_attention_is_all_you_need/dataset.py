@@ -2,6 +2,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 
+"""
+Dataset code ref (taken as is): https://github.com/hkproj/pytorch-transformer/blob/main/dataset.py
+"""
+
 
 class BilingualDataset(nn.Module):
     def __init__(self, ds, tokenizer_src, tokenizer_tgt, src_lang, tgt_lang, seq_len):

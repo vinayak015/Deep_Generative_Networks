@@ -29,6 +29,10 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 
 # ds = dataset
+"""
+Train code ref(taken as is): https://github.com/hkproj/pytorch-transformer/blob/main/train.py
+"""
+
 
 def get_all_sentences(ds, lang):
     for item in ds:
@@ -91,11 +95,10 @@ def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_
     eos_idx = tokenizer_tgt.token_to_id('[EOS]')
 
     # Precompute the encoder output and reuse it for every step
-    encoder_output = model.encoder_fwd(source, input_mask=source_mask)
+    encoder_output, self_attentions_encoder = model.encoder_fwd(source, input_mask=source_mask)
 
     # Initialize the decoder input with the sos token
     decoder_input = torch.empty(1, 1).fill_(sos_idx).type_as(source).to(device)
-    count = 0
     while True:
         if decoder_input.size(1) == max_len:
             break
@@ -104,7 +107,7 @@ def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_
         decoder_mask = causal_mask(decoder_input.size(1)).type_as(source_mask).to(device)
 
         # calculate output
-        out = model.decoder_fwd(encoder_output, decoder_input, input_mask=source_mask, tgt_mask=decoder_mask)
+        out, self_attentions_decoder, self_attentions_decoder = model.decoder_fwd(encoder_output, decoder_input, input_mask=source_mask, tgt_mask=decoder_mask)
 
         # get next token
         prob = out[:, -1]
@@ -115,9 +118,7 @@ def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_
 
         if next_word == eos_idx:
             break
-        # if count>5:
-        #     break
-        count+=1
+
     return decoder_input.squeeze(0)
 
 
@@ -187,8 +188,8 @@ def get_all_sentences(ds, lang):
 
 
 def train(config):
-    # device = "cuda" if torch.cuda.is_available() else "mps" if torch.has_mps or torch.backends.mps.is_available() else "cpu"
-    device = "cpu"
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.has_mps or torch.backends.mps.is_available() else "cpu"
+    # device = "cpu"
     print(f"using device: {device}")
     device = torch.device(device)
 
@@ -221,16 +222,19 @@ def train(config):
         torch.cuda.empty_cache()
         model.train()
         batch_iterator = tqdm(train_dataloader, desc=f"Epoch {epoch:02d}")
-        run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device,
-                       lambda msg: batch_iterator.write(msg), global_step, writer)
+        # run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device,
+        #                lambda msg: batch_iterator.write(msg), global_step, writer)
         for batch in batch_iterator:
             encoder_input = batch['encoder_input'].to(device)
             decoder_input = batch['decoder_input'].to(device)
             encoder_mask = batch['encoder_mask'].to(device)
             decoder_mask = batch['decoder_mask'].to(device)
 
-            encoder_out = model.encoder_fwd(encoder_input, encoder_mask)
-            decoder_out = model.decoder_fwd(encoder_out, decoder_input, decoder_mask)
+            encoder_out, self_attentions_encoder = model.encoder_fwd(encoder_input, encoder_mask)
+            decoder_out, self_attentions_decoder, cross_attentions_decoder = model.decoder_fwd(encoder_out,
+                                                                                               decoder_input,
+                                                                                               input_mask=encoder_mask,
+                                                                                               tgt_mask=decoder_mask)
             # out = model(encoder_input, decoder_input, encoder_mask, decoder_mask)["decoder_out"]
             # out = out.argmax(dim=-1)
             label = batch['label'].to(device)
@@ -257,10 +261,13 @@ def train(config):
         # Save the model at the end of each epoch
         model_filename = get_weight_file_path(config, f"{epoch:02d}")
         torch.save({
-            'epoch':epoch,
+            'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'global_step': global_step
+            'global_step': global_step,
+            'self_attentions_encoder': self_attentions_encoder,
+            'self_attentions_decoder': self_attentions_decoder,
+            'cross_attentions_decoder': cross_attentions_decoder
         }, model_filename)
 
 
