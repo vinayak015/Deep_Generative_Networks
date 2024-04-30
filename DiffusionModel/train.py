@@ -11,6 +11,7 @@ from linear_scheduler import LinearScheduler
 
 device = torch.device("cuda")
 
+
 # Ref: https://github.com/explainingai-code/DDPM-Pytorch
 
 
@@ -37,7 +38,6 @@ def train():
             ckpt_name = f"train_{epoch}.pt"
             desc = f"Epoch {epoch}"
             for data in dataloader:
-
                 labels, images = data['labels'], data['images']
                 optim.zero_grad()
                 images = images.float().to(device)
@@ -68,4 +68,5 @@ def train():
     pbar.close()
 
 
-train()
+if __name__ == "__main__":
+    train()

@@ -71,9 +71,11 @@ def start_sampling():
     scheduler = DDPMSample(num_time_steps=1000, beta_start=0.0001, beta_end=0.02, device=device, model=model)
     scheduler.sample()
 
-input_folder = 'visualization/samples'
-output_file = 'visualization/animation/animation.gif'
+
+if __name__ == "__main__":
+    input_folder = 'visualization/samples'
+    output_file = 'visualization/animation/animation.gif'
 
 
-start_sampling()
-create_animation(input_folder, output_file)
+    start_sampling()
+    create_animation(input_folder, output_file)
