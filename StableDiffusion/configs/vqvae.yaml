@@ -1,0 +1,26 @@
+VQ-VAE:
+  common_args:
+    z_channels: 256
+    code_book_size: 8192
+    beta: 0.02
+    im_channels: 3
+
+  Encoder:
+    channels: [64, 128, 256, 256]
+    t_emb: 0
+    is_down_sample: [True, True, False]
+    num_heads: 0
+    num_sub_layers: 1
+    mid_layers: [256, 256]
+
+  Decoder:
+    channels: [256, 256, 128, 64]
+    t_emb: 0
+    is_up_sample: [False, True, True]
+    num_heads: 0
+    num_sub_layers: 1
+    is_concat: False
+
+
+
+
