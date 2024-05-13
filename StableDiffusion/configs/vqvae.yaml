@@ -2,7 +2,8 @@ VQ-VAE:
   common_args:
     z_channels: 256
     code_book_size: 8192
-    beta: 0.02
+    codebook_weight: 0.02
+    commitment_beta: 0.02
     im_channels: 3
 
   Encoder:
@@ -22,5 +23,26 @@ VQ-VAE:
     is_concat: False
 
 
+dataset:
+  root: "/home/pc2/vinayak_dev/datasets/CelebAMask-HQ"
+  im_path: "CelebA-HQ-img"
+  txt_path : "celeba-caption"
+  masks_path : "CelebAMask-HQ-mask"
+  im_size : 64
+  mask_h : 512
+  mask_w : 512
+  condition_types : ["text","image"]
 
-
+train:
+  batch : 32
+  ckpt_dir: "checkpoints/vq-vae"
+  epochs : 60
+  lr : 0.00001
+  perceptual_weight: 1
+  d:
+    num_channels : 3
+    block_expansion : 64
+    num_blocks : 4
+    max_features : 512
+    start : 15000
+    d_weight: 0.5

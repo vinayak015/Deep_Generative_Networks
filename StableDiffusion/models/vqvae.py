@@ -59,7 +59,7 @@ class Decoder(nn.Module):
 class VQVAE(nn.Module):
     def __init__(self, **args):
         super().__init__()
-        args_ = args['VQ-VAE']
+        args_ = args
         common_args = args_['common_args']
         im_channels = common_args.pop('im_channels')
         self.encoder_args = args_['Encoder']
@@ -70,7 +70,8 @@ class VQVAE(nn.Module):
 
         self.z_channels = common_args.pop('z_channels')
         self.code_book_size = common_args.pop('code_book_size')
-        self.beta = common_args.pop('beta')
+        self.beta = common_args.pop('commitment_beta')
+        self.codebook_weight = common_args.pop('codebook_weight')
 
         self.encoder = Encoder(**self.encoder_args)
         self.pre_quant_conv = nn.Sequential(
@@ -87,22 +88,13 @@ class VQVAE(nn.Module):
 
         self.decoder = Decoder(**self.decoder_args)
 
-    def forward(self): ...
-
-    def loss(self, input_):
+    def forward(self, input_):
         feat = self.encoder(input_)
-        quant_out, quant_loss = self.quantize(feat)
+        quant_out, quant_losses = self.quantize(feat)
 
         reconstruction = self.decoder(quant_out)
 
-        # reconstruction loss
-        # recon_loss = F.mse_loss(input_, reconstruction, reduction='none').view(input_.shape[0], -1).sum().mean()
-        recon_loss = F.mse_loss(input_, reconstruction)
-        loss = recon_loss + quant_loss
-
-        result = OrderedDict(loss=loss, quanized_loss=quant_loss)
-
-        return result
+        return reconstruction, quant_out, quant_losses
 
     def quantize(self, feat):
         # self.embeddings = nn.Embedding(512, 3)
@@ -146,15 +138,16 @@ class VQVAE(nn.Module):
         # then centroid should be as close to quant_in
         codebook_loss = ((quant_in.detach() - quant_out) ** 2).mean()
 
-        quantize_loss = commitment_loss + self.beta * codebook_loss
+        quantize_losses = {"commitment_loss":self.codebook_weight * commitment_loss,
+                           "code_book_loss":self.beta * codebook_loss}
 
-        return quantize_loss
+        return quantize_losses
 
+if __name__ == "main":
+    with open('../configs/vqvae.yaml', 'r') as file:
+        config = yaml.safe_load(file)
+    config
 
-with open('configs/vqvae.yaml', 'r') as file:
-    config = yaml.safe_load(file)
-config
-
-x = torch.randn(16, 3, 28, 28)
-model = VQVAE(**config)
-out = model.loss(x)
+    x = torch.randn(16, 3, 28, 28)
+    model = VQVAE(**config)
+    out = model.loss(x)
